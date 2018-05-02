@@ -24,6 +24,7 @@
                        ("rec", REC);
                        ("true", TRUE);
                        ("false", FALSE);
+                       ("unit", UNIT);
                        ("lambda", FUNCTION);
                        ("fun", FUNCTION);
                        ("function", FUNCTION)

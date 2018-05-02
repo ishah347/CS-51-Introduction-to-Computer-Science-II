@@ -20,7 +20,8 @@
 %token FUNCTION
 %token RAISE
 %token <string> ID
-%token <int> INT 
+%token <int> INT
+%token UNIT
 %token TRUE FALSE
 
 %nonassoc LESSTHAN
@@ -42,6 +43,7 @@ exp:    exp expnoapp            { App($1, $2) }
 expnoapp: INT                   { Num $1 }
         | TRUE                  { Bool true }
         | FALSE                 { Bool false }
+        | UNIT                  { Unit ()}
         | ID                    { Var $1 }
         | exp PLUS exp          { Binop(Plus, $1, $3) }
         | exp MINUS exp         { Binop(Minus, $1, $3) }

@@ -46,29 +46,46 @@ module Env : Env_type =
     (* Creates a closure from an expression and the environment it's
        defined in *)
     let close (exp : expr) (env : env) : value =
-      failwith "close not implemented" ;;
+      Closure(exp, env) ;;
 
     (* Looks up the value of a variable in the environment *)
     let lookup (env : env) (varname : varid) : value =
-      failwith "lookup not implemented" ;;
+      try 
+        !(List.assoc varname env) 
+      with 
+        Not_found -> raise (EvalError (varname ^ " does not exist in env")) ;;
 
     (* Returns a new environment just like env except that it maps the
        variable varid to loc *)
     let extend (env : env) (varname : varid) (loc : value ref) : env =
-      failwith "extend not implemented" ;;
+      if not (List.mem_assoc varname env) then (varname, loc) :: env
+      else (varname, loc) :: (List.remove_assoc varname env) ;;
 
     (* Returns a printable string representation of a value; the flag
        printenvp determines whether to include the environment in the
        string representation when called on a closure *)
-    let value_to_string ?(printenvp : bool = true) (v : value) : string =
-      failwith "value_to_string not implemented" ;;
-
+    let rec value_to_string ?(printenvp : bool = true) (v : value) : string =
+      let rec value_to_string' v' = 
+        match v' with
+        | Val(exp) -> "Val(" ^ exp_to_abstract_string exp
+        | Closure(exp, en) ->
+            if not printenvp then value_to_string' (Val(exp)) 
+            else 
+              "Closure(" ^ exp_to_abstract_string exp ^ ", " 
+              ^ env_to_string en in
+      value_to_string' v ^ ")"     
     (* Returns a printable string representation of an environment *)
-    let env_to_string (env : env) : string =
-      failwith "env_to_string not implemented" ;;
+    and env_to_string (env : env) : string =
+      let rec env_to_string' env' = 
+        match env' with
+        | [] -> "]"
+        | hd :: tl -> 
+            let var, value = hd in
+            "(" ^ var ^ ", ref (" ^ value_to_string !value ^ ")); " ^ 
+              env_to_string' tl in
+      "[" ^ env_to_string' env ;;
   end
 ;;
-
 
 (*......................................................................
   Evaluation functions
@@ -89,26 +106,121 @@ module Env : Env_type =
    essentially unchanged, just converted to a value for consistency
    with the signature of the evaluators. *)
    
-let eval_t (exp : expr) (_env : Env.env) : Env.value =
+open Env ;;
+
+let eval_t (exp : expr) (_env : env) : value =
   (* coerce the expr, unchanged, into a value *)
-  Env.Val exp ;;
+  Val exp ;;
+
+let value_to_exp (v : value) : expr = 
+  match v with
+  | Val(e) | Closure(e, _) -> e
+
+let unopeval (eval : expr -> env -> value) 
+             (u : unop) 
+             (e : expr) 
+             (env : env) : value = 
+  match u, value_to_exp (eval e env) with
+  | Negate, Num(i) -> eval_t (Num(~- i)) env
+  | Negate, _ -> raise (EvalError "non-integers cannot be negated") ;; 
+
+let binopeval (eval : expr -> env -> value) 
+              (bi : binop)
+              (e1, e2 : expr * expr)
+              (env : env) : value =
+  let binopexp = 
+    match bi, value_to_exp (eval e1 env), value_to_exp (eval e2 env) with
+    | Plus, Num(i1), Num(i2) -> Num(i1 + i2)
+    | Plus, _, _ -> 
+        raise (EvalError "cannot add using non-integers")
+    | Minus, Num(i1), Num(i2) -> Num(i1 - i2)
+    | Minus, _, _ -> 
+        raise (EvalError "cannot subtract using non-integers")    
+    | Times, Num(i1), Num(i2) -> Num(i1 * i2)
+    | Times, _, _ -> 
+        raise (EvalError "cannot multiply using non-integers") 
+    | Equals, Num(i1), Num(i2) -> Bool(i1 = i2)
+    | Equals, Bool(b1), Bool(b2) -> Bool(b1 = b2)
+    | Equals, Unit(_), Unit(_) -> Bool(true)
+    | LessThan, Num(i1), Num(i2) -> Bool(i1 < i2)
+    | LessThan, Bool(b1), Bool(b2) -> Bool(b1 < b2)
+    | LessThan, Unit(_), Unit(_) -> Bool(false)
+    | _, _, _ -> 
+        raise (EvalError "can only compare a pair of ints, bools, or units") in
+  eval_t binopexp env ;; 
+
+let condeval (eval : expr -> env -> value) 
+             (e1, e2, e3 : expr * expr * expr) 
+             (env : env) : value =
+  if value_to_exp (eval e1 env) = Bool(true) then eval e2 env
+  else eval e3 env ;;    
 
 (* The SUBSTITUTION MODEL evaluator -- to be completed *)
    
-let eval_s (_exp : expr) (_env : Env.env) : Env.value =
-  failwith "eval_s not implemented" ;;
-     
+let rec eval_s (exp : expr) (env : env) : value =
+  match exp with
+  | Var(v) -> raise (EvalError ("substitution wasn't possible for " ^ v))
+  | Unassigned -> raise (EvalError "unassigned values can't be evaluated")
+  | Unop(u, e) -> unopeval eval_s u e env
+  | Binop(bi, e1, e2) -> binopeval eval_s bi (e1, e2) env
+  | Conditional(e1, e2, e3) -> condeval eval_s (e1, e2, e3) env 
+  | Let(v, e1, e2) -> eval_s (subst v (value_to_exp (eval_s e1 env)) e2) env
+  | Letrec(v, e1, e2) -> 
+      let repl = Letrec(v, e1, Var(v)) in
+      eval_s (subst v (value_to_exp (eval_s (subst v repl e1) env)) e2) env
+  | Raise -> raise EvalException
+  | App(e1, e2) -> 
+      (match value_to_exp (eval_s e1 env) with
+       | Fun(x, p) -> eval_s (subst x (value_to_exp (eval_s e2 env)) p) env
+       | _ -> raise (EvalError "app can only be performed onto a fun")) 
+  | _ -> eval_t exp env ;;
+
 (* The DYNAMICALLY-SCOPED ENVIRONMENT MODEL evaluator -- to be
    completed *)
    
-let eval_d (_exp : expr) (_env : Env.env) : Env.value =
-  failwith "eval_d not implemented" ;;
-       
+let rec eval_d (exp : expr) (env : env) : value =
+  let let_and_letrec_eval var e1 e2 env' = 
+    eval_d e2 (extend env' var (ref (eval_d e1 env'))) in  
+  match exp with
+  | Var(v) -> lookup env v
+  | Unop(u, e) -> unopeval eval_d u e env  
+  | Binop(bi, e1, e2) -> binopeval eval_d bi (e1, e2) env
+  | Conditional(e1, e2, e3) -> condeval eval_d (e1, e2, e3) env
+  | Let(v, e1, e2) -> let_and_letrec_eval v e1 e2 env
+  | Letrec(v, e1, e2) -> 
+      let rec_env = extend env v (ref (eval_t Unassigned env)) in
+      let_and_letrec_eval v e1 e2 rec_env
+  | App(e1, e2) -> 
+      (match value_to_exp (eval_d e1 env) with
+       | Fun(x, p) -> 
+           eval_d p (extend env x (ref (eval_d e2 env)))
+       | _ -> 
+           raise (EvalError "app can only be performed onto a fun"))
+  | _ -> eval_s exp env ;;
+
 (* The LEXICALLY-SCOPED ENVIRONMENT MODEL evaluator -- optionally
    completed as (part of) your extension *)
-   
-let eval_l (_exp : expr) (_env : Env.env) : Env.value =
-  failwith "eval_l not implemented" ;;
+
+let rec eval_l (exp : expr) (env : env) : value =
+  let let_and_letrec_eval var e1 e2 env' = 
+    eval_l e2 (extend env' var (ref (eval_l e1 env'))) in  
+  match exp with
+  | Var(v) -> lookup env v
+  | Unop(u, e) -> unopeval eval_l u e env  
+  | Binop(bi, e1, e2) -> binopeval eval_l bi (e1, e2) env
+  | Conditional(e1, e2, e3) -> condeval eval_l (e1, e2, e3) env
+  | Let(v, e1, e2) -> let_and_letrec_eval v e1 e2 env
+  | Letrec(v, e1, e2) -> 
+      let rec_env = extend env v (ref (eval_t Unassigned env)) in
+      let_and_letrec_eval v e1 e2 rec_env
+  | Fun(_, _) -> close exp env
+  | App(e1, e2) ->
+      (match eval_l e1 env with
+       | Closure(Fun(x, p), en) -> 
+           eval_l p (extend en x (ref (eval_l e2 env)))
+       | _ -> 
+           raise (EvalError "app can only be performed onto a fun"))
+  | _ -> eval_s exp env ;;
 
 (* Connecting the evaluators to the external world. The REPL in
    miniml.ml uses a call to the single function evaluate defined
@@ -118,4 +230,4 @@ let eval_l (_exp : expr) (_env : Env.env) : Env.value =
    above, not the evaluate function, so it doesn't matter how it's set
    when you submit your solution.) *)
    
-let evaluate = eval_t ;;
+let evaluate = eval_d ;;
