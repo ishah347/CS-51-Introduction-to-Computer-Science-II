@@ -70,7 +70,8 @@ let rec free_vars (exp : expr) : varidset =
     | Var(v) -> add v empty
     | Unop(_, e) -> free_vars e
     | Binop(_, e1, e2) | App(e1, e2) -> union (free_vars e1) (free_vars e2)
-    | Conditional(e1, e2, e3) -> union (union (free_vars e1) (free_vars e2)) (free_vars e3)
+    | Conditional(e1, e2, e3) -> 
+        union (union (free_vars e1) (free_vars e2)) (free_vars e3)
     | Fun (v, e) -> remove v (free_vars e)
     | Let(v, e1, e2) ->
         union (free_vars e1) (remove v (free_vars e2))
